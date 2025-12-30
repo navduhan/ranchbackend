@@ -7,7 +7,6 @@ const fileUpload = require('express-fileupload');
 
 const routes =require('./src/routes/species-routes')
 app.use(express.urlencoded({extended:true}))
-app.use(cors("*"))
 
 app.use(express.json())
 app.use(fileUpload({
@@ -22,20 +21,19 @@ db.on('error', console.error.bind(console, 'MongoDB connection error:'))
 // })
 const accessControl = (req, res,next) => {
 const allowedOrigins = [
-    'http://127.0.0.1:3603', 'http://localhost:3603','http://localhost:3603', 'http:bioinfo.usu.edu'
+    'http://127.0.0.1:3603', 'http://localhost:3603', 'https://bioinfo.usu.edu', 'https://kaabil.net'
   ];
   const origin = req.headers.origin;
-  /*
-  if (origin && typeof origin === 'string' && allowedOrigins.indexOf(origin) > -1) {
+  if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
-  */
-  res.header('Access-Control-Allow-Origin', 'http://bioinfo.usu.edu');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, KBL-User-Agent');
   res.header('Access-Control-Allow-Credentials', 'true');
   return next();
 }
+
+app.use(accessControl)
 
 // Allows other domains to use this domain as an API
 const originsWhitelist = [
