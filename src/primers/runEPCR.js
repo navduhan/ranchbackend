@@ -1,58 +1,48 @@
-const { spawn } = require('child_process');
-const { once } = require('events');
-const fs = require('fs');
+const fs = require('fs/promises');
 const path = require('path');
+const os = require('os');
+const { promisify } = require('util');
+const { execFile } = require('child_process');
 
-const runEPCR = (item, seq, mismatch, genome) => {
+const execFileAsync = promisify(execFile);
+const runtime = require('../config/runtime');
+const PRIMERSEARCH_BIN = runtime.PRIMERSEARCH_BIN;
 
-    var csvString = [];
-    
-      csvString = [
-        [
-          "Primer1",  
-          item.f1,
-          item.r1,
-        ],
+const runEPCR = async (item, seq, mismatch, genome) => {
+  const workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'ranch-epcr-'));
 
-        [
-            "Primer2", 
-            item.f2,
-            item.r2,
-          ],
-          [
-            "Primer3", 
-            item.f3,
-            item.r3,
-          ],
-      ]
-        .map((e) => e.join("\t"))
-        .join("\n");
-       console.log(item)
-       fs.writeFileSync(path.join(__dirname,"epcrdata/pinput.txt"), csvString);
-       fs.writeFileSync(path.join(__dirname,"epcrdata/dnaseq.fa"), seq);
-       
+  try {
+    const pinputFile = path.join(workdir, 'pinput.txt');
+    const seqFile = path.join(workdir, 'dnaseq.fa');
+    const outFile = path.join(workdir, 'result.txt');
 
-    let sequence;
-    let prpath = '/opt/software/emboss/EMBOSS-6.6.0/emboss/primersearch'
-    // let prpath = '/opt/homebrew/bin/primersearch'
-    if (seq != ''){
-        sequence = path.join(__dirname,'epcrdata/dnaseq.fa')
-    }
-    else{
-        sequence = path.join(__dirname,`../data/${genome}`)
-    }
-    
-    const child = require('child_process').execSync(`${prpath} -infile ${path.join(__dirname,'epcrdata/pinput.txt')} -seqall ${sequence} -mismatchpercent ${mismatch} -outfile ${path.join(__dirname,'epcrdata/test.txt')}`)
-       
-    return new Promise((res, rej) => {
-    const ampli = fs.readFileSync(path.join(__dirname,"epcrdata/test.txt"))
-    res(ampli)
-       
-    });
-}
+    const csvString = [
+      ['Primer1', item.f1, item.r1],
+      ['Primer2', item.f2, item.r2],
+      ['Primer3', item.f3, item.r3],
+    ].map((e) => e.join('\t')).join('\n');
 
+    await fs.writeFile(pinputFile, csvString, 'utf8');
 
+    const sequence = seq && seq.trim() !== ''
+      ? (await fs.writeFile(seqFile, seq, 'utf8'), seqFile)
+      : path.join(runtime.DATA_DIR, genome);
 
-module.exports = runEPCR
+    await execFileAsync(PRIMERSEARCH_BIN, [
+      '-infile',
+      pinputFile,
+      '-seqall',
+      sequence,
+      '-mismatchpercent',
+      String(mismatch),
+      '-outfile',
+      outFile,
+    ]);
 
+    return fs.readFile(outFile, 'utf8');
+  } finally {
+    await fs.rm(workdir, { recursive: true, force: true });
+  }
+};
 
+module.exports = runEPCR;

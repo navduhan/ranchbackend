@@ -1,16 +1,23 @@
-const express = require ('express')
-const cors = require ('cors')
+require('dotenv').config();
+
+const express = require('express')
+const cors = require('cors')
 const db = require('./src/db')
+const fs = require('fs/promises')
+const path = require('path')
+const runtime = require('./src/config/runtime')
 const app = express()
-const apiPort = 3603
+const apiPort = runtime.PORT
 const fileUpload = require('express-fileupload');
 
-const routes =require('./src/routes/species-routes')
+const routes = require('./src/routes/species-routes')
 app.use(express.urlencoded({extended:true}))
 
 app.use(express.json())
 app.use(fileUpload({
-  createParentPath: true
+  createParentPath: true,
+  limits: { fileSize: 25 * 1024 * 1024 },
+  abortOnLimit: true,
 }));
 
 // app.use(require("./routes/species-routes"));
@@ -19,49 +26,68 @@ db.on('error', console.error.bind(console, 'MongoDB connection error:'))
 // app.get('/', (req,res)=>{
 //     res.send('Hello World')
 // })
-const accessControl = (req, res,next) => {
-const allowedOrigins = [
-    'http://127.0.0.1:3603', 'http://localhost:3603', 'https://bioinfo.usu.edu', 'https://kaabil.net'
-  ];
-  const origin = req.headers.origin;
-  if (origin && allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  }
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, KBL-User-Agent');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  return next();
-}
+const allowedOrigins = runtime.ALLOWED_ORIGINS;
 
-app.use(accessControl)
-
-// Allows other domains to use this domain as an API
-const originsWhitelist = [
-  'http://127.0.0.1:3603', 'http://localhost:3603', 'http://localhost:3603'
-];
-const corsOptions = {
-  origin: (origin, callback) => {
-    if (origin && originsWhitelist.indexOf(origin) >= -1) {
-      return callback(null, true);
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+      return;
     }
+    callback(new Error('CORS Error'));
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'KBL-User-Agent'],
+  credentials: true,
+}));
 
-    const error = new Error('CORS Error');
+const ensureRuntimePaths = async () => {
+  const requiredPaths = [
+    runtime.PRIMER3_BIN,
+    runtime.PRIMERSEARCH_BIN,
+    path.join(runtime.BLAST_BIN_DIR, 'blastn'),
+    runtime.PREDDATA_DIR,
+    runtime.DATA_DIR,
+  ];
 
-    return callback(error, false);
+  const missing = [];
+  await Promise.all(requiredPaths.map(async (runtimePath) => {
+    try {
+      await fs.access(runtimePath);
+    } catch (_err) {
+      missing.push(runtimePath);
+    }
+  }));
+
+  if (missing.length > 0) {
+    const msg = `Missing runtime paths: ${missing.join(', ')}`;
+    if (runtime.STRICT_RUNTIME_CHECKS) {
+      throw new Error(msg);
+    }
+    console.warn(`[WARN] ${msg}`);
   }
-}
+};
 
-const cOpt = {
-  origin: 'http://localhost:3603',
-  credentials: true
-}
+app.get('/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'ranchbackend',
+    timestamp: new Date().toISOString(),
+  });
+});
 
 
 
 app.use("/api", routes)
 
-app.listen(apiPort, ()=> console.log(`Server runnning on port ${apiPort}`))
-
-
-
-
+ensureRuntimePaths()
+  .then(() => {
+    if (process.env.JOB_CONCURRENCY === undefined) {
+      console.warn('[WARN] Job queue is in-memory; queued/running jobs are lost on restart.');
+    }
+    app.listen(apiPort, ()=> console.log(`Server runnning on port ${apiPort}`))
+  })
+  .catch((err) => {
+    console.error('Startup runtime check failed:', err.message);
+    process.exit(1);
+  });

@@ -1,59 +1,61 @@
-
-const fs = require('fs');
+const fs = require('fs/promises');
 const path = require('path');
+const { promisify } = require('util');
+const { execFile } = require('child_process');
 
+const execFileAsync = promisify(execFile);
+const runtime = require('../config/runtime');
+const BLAST_BIN_DIR = runtime.BLAST_BIN_DIR;
+const ALLOWED_PROGRAMS = new Set(['blastn', 'blastp', 'blastx', 'tblastn', 'tblastx']);
 
+const parseBlastOutput = (raw) => {
+  const cells = raw.split('\n').map((el) => el.trim().split(/\s+/));
+  const headings = ['qseqid', 'sseqid', 'pident', 'length', 'mismatch', 'gapopen', 'qstart', 'qend', 'sstart', 'send', 'evalue', 'bitscore'];
+  const rows = cells.filter((row) => row.length > 1 && row[0] !== '');
 
-
-
-
-const runBlast = (id, filedata, program, genome, word, target, evalue) => {
-
-    console.log(filedata)
-
-    const child = require('child_process').execSync(`"/opt/software/ncbi-blast-2.7.1+-src/c++/bin/"${program} -db ${path.join(__dirname, "../data/"+genome)} -query ${filedata} -max_target_seqs ${target} -word_size ${word} -evalue ${evalue} -num_threads 20 -outfmt 6 -out ${path.join(__dirname,`preddata/pred${id}.out.xml`)}`)
-       
-    return new Promise((res, rej) => {
-       
-   
-    const ampli = fs.readFileSync(path.join(__dirname,`preddata/pred${id}.out.xml`), 'utf8')
-
-    // const ampli = fs.readFileSync(path.join(__dirname,`preddata/test.out.xml`), 'utf8')
-
-    const cells = ampli.split('\n').map(function (el) { return el.split(/\s+/); });
-
-   
-
-
-    const headings = ['qseqid', 'sseqid', 'pident', 'length', 'mismatch', 'gapopen', 'qstart', 'qend', 'sstart', 'send', 'evalue', 'bitscore']
-   
-    var objd = cells.filter(function (el) {
-      return el != '';
-    });
-
-    console.log(objd)
-    
-    const obj = objd.map(function (el) {
-        let obj = {};
-        for (let i = 0, l = el.length; i < l; i++) {
-           
-          obj[headings[i]] = isNaN(Number(el[i])) ? el[i] : +el[i];
-        
+  return rows.map((row) => {
+    const out = {};
+    for (let i = 0; i < row.length; i += 1) {
+      out[headings[i]] = Number.isNaN(Number(row[i])) ? row[i] : Number(row[i]);
     }
-        return obj;
-      });
+    return out;
+  });
+};
 
-     
-      
-      const jsondata = JSON.stringify(obj);
-  
-    
+const runBlast = async (id, filedata, program, genome, word, target, evalue) => {
+  if (!ALLOWED_PROGRAMS.has(program)) {
+    throw new Error('Invalid BLAST program');
+  }
 
-    
-    res(jsondata)
+  const binary = path.join(BLAST_BIN_DIR, program);
+  const dbPath = path.join(runtime.DATA_DIR, genome);
+  const outFile = path.join(runtime.PREDDATA_DIR, `pred${id}.out.tsv`);
 
-    });
+  await execFileAsync(binary, [
+    '-db',
+    dbPath,
+    '-query',
+    filedata,
+    '-max_target_seqs',
+    String(target),
+    '-word_size',
+    String(word),
+    '-evalue',
+    String(evalue),
+    '-num_threads',
+    '20',
+    '-outfmt',
+    '6',
+    '-out',
+    outFile,
+  ]);
 
-}
+  try {
+    const raw = await fs.readFile(outFile, 'utf8');
+    return JSON.stringify(parseBlastOutput(raw));
+  } finally {
+    await fs.unlink(outFile).catch(() => {});
+  }
+};
 
-module.exports = runBlast
+module.exports = runBlast;

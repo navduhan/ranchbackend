@@ -1,49 +1,52 @@
-const { spawn } = require('child_process');
-const { once } = require('events');
-const fs = require('fs');
+const fs = require('fs/promises');
 const path = require('path');
-const FileReader = require('filereader')
+const { promisify } = require('util');
+const { execFile } = require('child_process');
 
+const execFileAsync = promisify(execFile);
+const runtime = require('../config/runtime');
 
+const parsePredictionOutput = (raw) => {
+  const cells = raw.split('\n').map((el) => el.trim().split(/\s+/));
+  const headings = cells.shift() || [];
 
+  const rows = cells.filter((row) => row.length > 1 && row[0] !== '');
+  return rows.map((row) => {
+    const out = {};
+    for (let i = 0; i < row.length; i += 1) {
+      out[headings[i]] = Number.isNaN(Number(row[i])) ? row[i] : Number(row[i]);
+    }
+    return out;
+  });
+};
 
+const runPrediction = async (id, filedata, minRepeat, maxRepeat, mono, all) => {
+  const outPrefix = path.join(runtime.PREDDATA_DIR, `pred${id}`);
+  const script = path.join(__dirname, 'MicroSatMiner.pl');
+  const outputFile = `${outPrefix}.ssr.txt`;
 
-const runPrediction = (id, filedata, minRepeat, maxRepeat, mono, all) => {
+  await execFileAsync(runtime.PERL_BIN, [
+    script,
+    '-i',
+    filedata,
+    '-min',
+    String(minRepeat),
+    '-max',
+    String(maxRepeat),
+    '-ml',
+    String(mono),
+    '-t',
+    String(all),
+    '-sp',
+    outPrefix,
+  ]);
 
-    const cmd = `perl ${path.join(__dirname,"MicroSatMiner.pl")} -i ${filedata} -min ${minRepeat} -max ${maxRepeat} -ml ${mono} -t ${all} -sp ${path.join(__dirname,"preddata/pred"+id)}`
-    console.log(cmd)
-    const child = require('child_process').execSync(`perl ${path.join(__dirname,"MicroSatMiner.pl")} -i ${filedata} -min ${minRepeat} -max ${maxRepeat} -ml ${mono} -t ${all} -sp ${path.join(__dirname,"preddata/pred"+id)}`)
-       
-    return new Promise((res, rej) => {
-       
-   
-    const ampli = fs.readFileSync(path.join(__dirname,`preddata/pred${id}.ssr.txt`), 'utf8')
-    
-    
-    const cells = ampli.split('\n').map(function (el) { return el.split(/\s+/); });
-    
-    const headings = cells.shift();
-    
-      
-    var objd = cells.filter(function (el) {
-      return el != '';
-    });
-
-    const obj = objd.map(function (el) {
-        let obj = {};
-        for (let i = 0, l = el.length; i < l; i++) {
-          obj[headings[i]] = isNaN(Number(el[i])) ? el[i] : +el[i];
-        }
-        return obj;
-      });
-      const jsondata = JSON.stringify(obj);
-    
-    
-    
-    res(jsondata)
-
-    });
-
-}
+  try {
+    const raw = await fs.readFile(outputFile, 'utf8');
+    return JSON.stringify(parsePredictionOutput(raw));
+  } finally {
+    await fs.unlink(outputFile).catch(() => {});
+  }
+};
 
 module.exports = runPrediction

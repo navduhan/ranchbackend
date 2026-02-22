@@ -1,90 +1,91 @@
 const { spawn } = require('child_process');
-const { once } = require('events');
-const fs = require('fs');
+const fs = require('fs/promises');
 const path = require('path');
+const os = require('os');
 
-const getPrimers = (seq, motif_length, minS, maxS, minTM, maxTM, minGC, maxGC, flank) => {
+const runtime = require('../config/runtime');
+const PRIMER3_BIN = runtime.PRIMER3_BIN;
 
-    console.log(flank)
-    let excludeStart = parseInt(flank) - 3
-    console.log(excludeStart)
-    let a = excludeStart - 1
-    let b = parseInt(excludeStart) + 1
-    let excluseEnd = parseInt(motif_length) + 3
-    let excludeRegion = `${excludeStart},${excluseEnd}`
-    let okEnd = parseInt(excluseEnd) + parseInt(excludeStart) + 2
-    let okRegion = `1,${a},${okEnd},${b}`
+const parsePrimer3Output = (output) => {
+  const out = {};
+  output.split('\n').forEach((line) => {
+    const idx = line.indexOf('=');
+    if (idx > 0) {
+      const key = line.slice(0, idx).trim();
+      const value = line.slice(idx + 1).trim();
+      out[key] = value;
+    }
+  });
 
-    let datainput = `SEQUENCE_ID=example\nSEQUENCE_TEMPLATE=${seq}\nPRIMER_TASK=generic\nPRIMER_NUM_RETURN=3
+  return {
+    f1: out.PRIMER_LEFT_0_SEQUENCE,
+    r1: out.PRIMER_RIGHT_0_SEQUENCE,
+    f1tm: out.PRIMER_LEFT_0_TM,
+    r1tm: out.PRIMER_RIGHT_0_TM,
+    f1GC: out.PRIMER_LEFT_0_GC_PERCENT,
+    r1GC: out.PRIMER_RIGHT_0_GC_PERCENT,
+    p1psize: out.PRIMER_PAIR_0_PRODUCT_SIZE,
+    f2: out.PRIMER_LEFT_1_SEQUENCE,
+    r2: out.PRIMER_RIGHT_1_SEQUENCE,
+    f2tm: out.PRIMER_LEFT_1_TM,
+    r2tm: out.PRIMER_RIGHT_1_TM,
+    f2GC: out.PRIMER_LEFT_1_GC_PERCENT,
+    r2GC: out.PRIMER_RIGHT_1_GC_PERCENT,
+    p2psize: out.PRIMER_PAIR_1_PRODUCT_SIZE,
+    f3: out.PRIMER_LEFT_2_SEQUENCE,
+    r3: out.PRIMER_RIGHT_2_SEQUENCE,
+    f3tm: out.PRIMER_LEFT_2_TM,
+    r3tm: out.PRIMER_RIGHT_2_TM,
+    f3GC: out.PRIMER_LEFT_2_GC_PERCENT,
+    r3GC: out.PRIMER_RIGHT_2_GC_PERCENT,
+    p3psize: out.PRIMER_PAIR_2_PRODUCT_SIZE,
+  };
+};
+
+const getPrimers = async (seq, motif_length, minS, maxS, minTM, maxTM, minGC, maxGC, flank) => {
+  const excludeStart = Number.parseInt(flank, 10) - 3;
+  const excludeEnd = Number.parseInt(motif_length, 10) + 3;
+  const excludeRegion = `${excludeStart},${excludeEnd}`;
+
+  const datainput = `SEQUENCE_ID=example\nSEQUENCE_TEMPLATE=${seq}\nPRIMER_TASK=generic\nPRIMER_NUM_RETURN=3
 PRIMER_PICK_LEFT_PRIMER=1\nPRIMER_PICK_INTERNAL_OLIGO=0\nPRIMER_PICK_RIGHT_PRIMER=1\nPRIMER_OPT_SIZE=20
 PRIMER_MIN_SIZE=${minS}\nPRIMER_MAX_SIZE=${maxS}\nPRIMER_MIN_TM=${minTM}\nPRIMER_MAX_TM=${maxTM}
 PRIMER_MIN_GC=${minGC}\nPRIMER_MAX_GC=${maxGC}\nSEQUENCE_TARGET=${excludeRegion}\nSEQUENCE_INTERNAL_EXCLUDE_REGION=${excludeRegion}
-PRIMER_PRODUCT_SIZE_RANGE=100-200\nPRIMER_EXPLAIN_FLAG=1\n=`
-    fs.writeFileSync(path.join(__dirname,"input.txt"), datainput);
-    // console.log(__dirname)
+PRIMER_PRODUCT_SIZE_RANGE=100-200\nPRIMER_EXPLAIN_FLAG=1\n=`;
 
+  const workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'ranch-primer3-'));
+  const inputFile = path.join(workdir, 'input.txt');
 
-    let output;
-    let prpath = '/opt/software/primer3/2.6.1/src/primer3_core'
-    // let prpath = '/opt/primer3/src/primer3_core'
-    const getS = spawn(prpath, [path.join(__dirname,'/input.txt')]);
-    getS.stdout.on('data', (data) => {
-        output = data.toString();
+  try {
+    await fs.writeFile(inputFile, datainput, 'utf8');
 
-        // console.log('output was generated: ' + output);
+    const output = await new Promise((resolve, reject) => {
+      const child = spawn(PRIMER3_BIN, [inputFile]);
+      let stdout = '';
+      let stderr = '';
+
+      child.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      child.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code !== 0) {
+          reject(new Error(`primer3 failed (${code}): ${stderr}`));
+          return;
+        }
+        resolve(stdout);
+      });
     });
 
-    getS.stdin.setEncoding = 'utf-8';
-    // Handle error output
-    getS.stderr.on('data', (data) => {
-        // As said before, convert the Uint8Array to a readable string.
-        console.log('error:' + data);
-    });
-    return new Promise((res, rej) => {
+    return parsePrimer3Output(output);
+  } finally {
+    await fs.rm(workdir, { recursive: true, force: true });
+  }
+};
 
-        getS.stdout.on('end', async function (code) {
-
-            
-            const dataPrimer = output.split('\n')
-            const pdata = {
-                'f1': dataPrimer[28].split("=")[1],
-                'r1': dataPrimer[29].split("=")[1],
-                'f1tm': dataPrimer[32].split("=")[1],
-                'r1tm': dataPrimer[33].split("=")[1],
-                'f1GC': dataPrimer[34].split("=")[1],
-                'r1GC': dataPrimer[35].split("=")[1],
-                'p1psize': dataPrimer[46].split("=")[1],
-                'f2': dataPrimer[51].split("=")[1],
-                'r2': dataPrimer[52].split("=")[1],
-                'f2tm': dataPrimer[55].split("=")[1],
-                'r2tm': dataPrimer[56].split("=")[1],
-                'f2GC': dataPrimer[57].split("=")[1],
-                'r2GC': dataPrimer[58].split("=")[1],
-                'p2psize': dataPrimer[69].split("=")[1],
-                'f3': dataPrimer[74].split("=")[1],
-                'r3': dataPrimer[75].split("=")[1],
-                'f3tm': dataPrimer[78].split("=")[1],
-                'r3tm': dataPrimer[79].split("=")[1],
-                'f3GC': dataPrimer[80].split("=")[1],
-                'r3GC': dataPrimer[81].split("=")[1],
-                'p3psize': dataPrimer[92].split("=")[1],
-
-            }
-            // console.log(output)
-
-                res(pdata);
-            
-            
-
-        })
-    });
-
-}
-
-// getPrimers("ATACGCTAAAACATTCATTTCATGATTGCTTACTTGGTAATTGTCTATTGAGTCTTTTTTGCTGCTCATTCTTTAAGCTTTAGCTGTATTCTTTTGACAATTTTAGAGGAGGGTCAGGGAAAAGAAAGAAAATGAGCCACATCTAGAATAAATATTAAGACTCACAAAATTTGGAGGAGGTACATAATTAACACTATACATATATATATTGGGGCTTTCCAGGTGGCACCTGTGGTACAGAACCTGACTGCCAATGCAGGAGACATAAGAGATGCGGGTTTGATCCCTTGGTCGGGAAGATCCCCTGGAGAAGGGCGTGGCACTCTGCTCCAATATTCTTGCCTGGAGAATCCCCTGGACAGAGGAGCCTGGGTTACTACTGTCCATAGGGTCACACAGAGTCAGACAC",10, 18, 22, 45,65,40,60,180)
-
-
-
-
-module.exports = getPrimers
-
+module.exports = getPrimers;

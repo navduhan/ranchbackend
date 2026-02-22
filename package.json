@@ -5,6 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "pm2:start": "pm2 start server.config.json",
+    "pm2:restart": "pm2 restart ranchbackend",
     "update": "git pull origin master && npm i && pm2 restart ranchbackend"
   },
   "keywords": [],
@@ -15,6 +17,7 @@
     "body-parser": "^1.19.2",
     "child_process": "^1.0.2",
     "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
     "express": "^4.17.3",
     "express-fileupload": "^1.4.0",
     "filereader": "^0.10.3",
