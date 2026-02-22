@@ -2,8 +2,7 @@
   "apps": [
     {
       "name": "ranchbackend",
-      "script": "index.js",
-      "cwd": "/Users/naveen/Documents/phd/ranch/ranchbackend",
+      "script": "./index.js",
       "instances": 1,
       "exec_mode": "fork",
       "autorestart": true,
